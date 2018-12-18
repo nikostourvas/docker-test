@@ -14,7 +14,7 @@ RUN wget -qO- \
   && Rscript -e "source('https://install-github.me/yihui/tinytex'); tinytex::r_texmf()" \
   && chown -R root:staff /opt/TinyTeX \
   && chmod -R g+w /opt/TinyTeX \
-  && chmod -R g+wx /opt/TinyTeX/bin \
+  && chmod -R g+wx /opt/TinyTeX/bin
   
 # Install Tahoma font
 COPY tahoma.ttf /usr/share/fonts/truetype/tahoma.ttf
