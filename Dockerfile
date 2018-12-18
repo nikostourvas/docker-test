@@ -17,8 +17,8 @@ RUN wget -qO- \
   && chmod -R g+wx /opt/TinyTeX/bin \
   
 # Install Tahoma font
-COPY tahoma.ttf /usr/share/fonts/truetype
-COPY tahomabd.ttf /usr/share/fonts/truetype
+COPY tahoma.ttf /usr/share/fonts/truetype/tahoma.ttf
+COPY tahomabd.ttf /usr/share/fonts/truetype/tahomabd.ttf
 
 # Install from github
 RUN installGithub.r \
