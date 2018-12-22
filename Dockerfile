@@ -16,11 +16,23 @@ RUN wget -qO- \
   && chmod -R g+w /opt/TinyTeX \
   && chmod -R g+wx /opt/TinyTeX/bin
   
+# Install additional Latex packages
+RUN tlmgr install \
+  greek-fontenc \
+  babel-greek
+  
 # Install Tahoma font
 COPY tahoma.ttf /usr/share/fonts/truetype/tahoma.ttf
 COPY tahomabd.ttf /usr/share/fonts/truetype/tahomabd.ttf
 
+# Install R packages from CRAN
+RUN install2.r --error \
+  bookdown \
+  && rm -rf /tmp/downloaded_packages/ /tmp/*.rds
+
 # Install from github
 RUN installGithub.r \
-jgx65/hierfstat \
-&& rm -rf /tmp/downloaded_packages/ /tmp/*.rds
+  jgx65/hierfstat \
+  && rm -rf /tmp/downloaded_packages/ /tmp/*.rds
+
+# Dummy change
