@@ -1,0 +1,960 @@
+---
+title: "Aleppo pine in Kassandra"
+author: "Nikos Tourvas"
+date: "Date (ISO 8601): `r format(Sys.time(), '%Y-%m-%d')`"
+output:
+  html_document:
+    theme: united
+    toc: yes
+    toc_float: true
+    code_folding: hide
+  word_document: 
+    toc: yes
+---
+
+### Load libraries
+```{r libraries}
+suppressPackageStartupMessages({
+  library(popprxl)
+  library(hierfstat)
+  library(magrittr)
+  library(pegas)
+  library(genepop)
+  library(mmod)
+  library(ape)
+  library(phangorn)
+  library(tidyverse)
+  library(reshape2)
+  library(strataG)
+  library(ggplot2)
+  library(lattice)
+  library(factoextra)
+  library(ggord)
+  library(RColorBrewer)
+  # library(ggcompoplot)
+  library(kableExtra)
+})
+```
+
+```{r import, cache=T}
+obj <- read.genalexcel(
+  "PINUS_LOCI_KASSANDRA.xlsx", 
+  sheet = "DATA", genclone = F,
+  geo = F) # set to "T" if geo data exist
+
+# # stratify data set
+# splitStrata(obj) <- ~Country/Pop
+```
+
+### Check for missing data
+```{r missing, cache=F, fig.width=10, dpi=300}
+capture.output(
+info_table(obj, type = "missing", plot = TRUE),
+file='NUL') 
+# capture.output is used to hide printing of the table on the console
+```
+
+```{r subset}
+# Subset dataset (as standalone function or nested)
+# s <- popsub(Abies_LifeGenMon, sublist =
+#          c("Adult_GR_1_IN", "Adult_GR_1_EX"))
+```
+
+### Summary statistics
+```{r summary, fig.width=10, out.width="85%", dpi=300, cache=T}
+
+summ <- summary(obj)
+
+# num.al= data.frame(name = names(toto$loc.n.all), alleles = toto$loc.n.all)
+barplot(summ$loc.n.all, ylab="Number of alleles", main="Number of alleles per locus")
+# knitr::kable(num.al, caption = "Number of alleles per locus")
+summ$loc.n.all
+```
+
+```{r genalex_basic}
+genalex_basic <- read.csv("genalex_basic.csv")
+knitr::kable(genalex_basic)
+
+gen_bas <- genalex_basic[-c(nrow(genalex_basic), nrow(genalex_basic)-1),] # remove total
+gen_bas <- gather(gen_bas, measure, value, -Pop, -Attribute)
+gen_bas2 <- spread(gen_bas, Attribute, value)
+
+measure_list <- split(gen_bas2, gen_bas2$measure)
+ho_uhe <- bind_rows(measure_list[["Ho"]], measure_list[["uHe"]])
+
+ggplot(ho_uhe, aes(x=factor(Pop), y=Mean, fill = factor(measure))) +
+  geom_bar(stat = "identity", position=position_dodge(0.5), width = 0.25)
+
+ggplot(ho_uhe, aes(x=factor(Pop), y=Mean, fill = factor(measure))) +
+  geom_bar(stat = "identity", position="dodge")
+```
+
+```{r fis_jackknife, cache=T}
+# Fis
+Fis_by_locus <- basic.stats(obj)[["Fis"]]
+Fis <- table_out(obj, Ho_by_locus, "Fis") # better use boot.ppfis
+
+x <- as.vector(Fis_by_locus)
+
+CV <- function(x) sqrt(var(x))/mean(x)
+
+jack <- function(x){
+jack <- numeric(length(x)-1)
+pseudo <- numeric(length(x))
+for (i in 1:length(x))
+{for (j in 1:length(x))
+{if(j < i) jack[j] <- x[j] else if(j > i) jack[j-1] <- x[j]}
+pseudo[i] <- length(x)*CV(x) -(length(x)-1)*CV(jack)}
+
+return(pseudo)
+}
+
+pseudo <- jack(x)
+mean(pseudo) + qt(0.975,length(x)-1)*sqrt(var(pseudo)/length(x))
+mean(pseudo) - qt(0.975,length(x)-1)*sqrt(var(pseudo)/length(x))
+```
+
+
+Πίνακες μόνο με τις τιμές των μεταβλητών (by locus & by pop)
+Ένα πίνακα με τιμές μεταβλητών (εκτός του Fis) με standard error
+Ένα πίνακα με Fis και τα Ci του
+Fst και Ci
+Nm
+AR ξεχωριστά δες εντολή private_alleles
+```{r summary_statistics, cache=T}
+
+# functions
+
+### basic statistics and their SEs
+table_out <- function(obj, variable, name){
+  
+means <- colMeans(variable, na.rm=T)
+out <- c(means, mean(variable))
+
+out <- as.data.frame(out)
+Pops <- c(popNames(obj), "Total")
+rownames(out) <- Pops
+colnames(out) <- name
+
+sem_out <- apply(variable, 2, function(x) sd(x) / sqrt(length(x))) # 2 means work along columns
+sem_out_mean <- sd(variable) / sqrt(length(variable))
+
+sem_out <- as.data.frame(c(sem_out, sem_out_mean))
+rownames(sem_out) <- Pops
+colnames(sem_out) <- paste("SE", name, sep = "_")
+
+table_out <- cbind(out, sem_out)
+
+return(table_out)
+}
+
+
+### basic statistics reported from poppr and their SEs
+poppr2hierfstat_out <- function(obj, variable){
+  
+obj_list <- seppop(obj)
+  
+stats_poppr <- list()
+for(i in 1: length(obj_list)){
+  stats_poppr[[i]] <- locus_table(obj_list[[i]])
+}
+
+table_out <- list()
+for(i in 1:length(obj_list))
+table_out[[i]] <- stats_poppr[[i]][-nrow(stats_poppr[[1]]), variable]
+
+table_out <- as.matrix(as.data.frame(table_out))
+colnames(table_out) <- popNames(obj)
+
+return(table_out)
+}
+
+
+# N
+N_by_locus <- basic.stats(obj)[["n.ind.samp"]]
+N <- table_out(obj, N_by_locus, "N")
+
+# na
+na_by_locus <- poppr2hierfstat_out(obj, "allele")
+na <- table_out(obj, na_by_locus, "na")
+
+# uHe
+uHe_by_locus <- poppr2hierfstat_out(obj, "Hexp")
+uHe <- table_out(obj, uHe_by_locus, "uHe")
+
+# Ho
+Ho_by_locus <- basic.stats(obj)[["Ho"]]
+Ho <- table_out(obj, Ho_by_locus, "Ho")
+
+# ne
+ne_by_locus_Hs <- 1 / (1 - (basic.stats(obj)[["Hs"]]))
+ne_Hs <- table_out(obj, ne_by_locus, "ne")
+
+# # ne
+# ne_by_locus_He <- 1 / (1 - (basic.stats(obj)[["Hs"]]))
+# ne_Hs <- table_out(obj, ne_by_locus, "ne")
+
+# Fis
+Fis_by_locus <- basic.stats(obj)[["Fis"]]
+Fis <- table_out(obj, Ho_by_locus, "Fis") # better use boot.ppfis
+boot.fis <- boot.ppfis(obj, nboot=100)
+
+# P% percentage of polymorphic loci
+na_by_locus <- poppr2hierfstat_out(obj, "allele")
+
+
+obj_list <- seppop(obj)
+
+na_p <- list()
+for(i in 1: length(obj_list)){
+  na_p[[i]] <- locus_table(obj_list[[i]])[ 1:dim(N_by_locus)[1] , "allele"]
+}
+
+
+for(i in 1:length(obj_list)){
+  na_p[[i]][na_p > 1] <- 1
+}
+
+na2 <- numeric()
+na2[na_p[[1]] > 1] <- 1
+na2[na_p[[1]] == 1 ] <- 0
+
+p <- sum(na2) / dim(N_by_locus)[1] * 100
+
+# LGP
+
+# I Simpson (GenAlEx)
+
+```
+
+
+```{r F-statistics, cache=T}
+
+# Fst
+Fst_by_locus <- as.matrix(basic.stats(obj)[["perloc"]][["Fst"]])
+Fst <- # den mporei na xrhsimopoihuei to table_out
+  
+obj_hier <- genind2hierfstat(obj)
+boot.fst <- boot.ppfst(dat=obj_hier, nboot = 1000)
+  
+data("gtrunchier")
+boot.ppfst(gtrunchier[,-2])$ul
+
+# Nm  
+  Nm <- ((1 / Fst) - 1) / 4
+```
+
+```{r divPart}
+library(diveRsity)
+diffDiv <- diffCalc(infile = "PINUS_LOCI_KASSANDRA_genepop.gen", pairwise = T, bs_locus = T, boots = 1000, ci_type = "loci", para = T)
+
+fastDiv <- fastDivPart(infile = "PINUS_LOCI_KASSANDRA_genepop.gen", pairwise = T, bs_locus = T, boots = 1000, para = T)
+
+```
+
+
+### ADD Hs is uHE, na, ne, AR, LGP, standard errors for ALL
+#### create a second table for standard errors so that it can be displayed nicely
+#### internally merge the two tables and create ggplot graphs
+```{r table, cache=TRUE}
+# div <- poppr(obj, plot=F)
+# div <- div[,!names(div)%in%c("File","Hexp")]
+
+# #na
+# summ <- summary(obj)
+# na <- summ[["pop.n.all"]]/length(summ[["loc.n.all"]])
+# na <- c(na, mean(na))
+# div$na <- na
+
+
+# He - Nei 1978 poppr
+obj_list <- seppop(obj)
+
+# Pop names
+Pops <- c(popNames(obj), "Total")
+
+# Number of individuals
+N <- list()
+for(i in 1: length(obj_list)){
+N[[i]] <- nrow(obj_list[[i]]@tab) 
+}
+N <- unlist(N)
+N <- c(N, sum(N))
+
+N <- as.matrix(N)
+rownames(N) <- Pops
+colnames(N) <- "N"
+
+
+
+
+
+
+
+  # get summary statistics for each pop
+stats_p <- list()
+for(i in 1: length(obj_list)){
+  stats_p[[i]] <- locus_table(obj_list[[i]])
+}
+
+  # isolate uhe mean value for each pop
+uhe <- vector(mode = "double")
+for(i in 1: length(obj_list)){
+uhe[i] <- stats_p[[i]][ length(stats_p[[i]][,3]) , 3 ] # I pick the last line
+}
+uhe <- c(uhe, mean(uhe)) # column to be added to the summary table
+uhe <- as.matrix(uhe)
+rownames(uhe) <- Pops
+colnames(uhe) <- "uHE"
+
+
+
+
+  # isolate uhe loci values for each pop
+summ_uhe <- list()
+for(i in 1: length(obj_list)){
+summ_uhe[[i]] <- stats_p[[i]][ -length(stats_p[[i]][,3]) , 3 ] # I pick all lines but the last
+}
+  #calculate standard error of the mean
+sem_uhe <- list()
+for(i in 1: length(obj_list)){
+sem_uhe[[i]] <- sd(summ_uhe[[i]]) / sqrt(length(summ_uhe[[i]]))
+}
+sem_uhe <- unlist(sem_uhe)
+
+  #calculate standard error of the mean of the means
+sem_uhe_mean <- sd(unlist(summ_uhe)) / sqrt(length(unlist(summ_uhe)))
+
+    #combine standard errors
+sem_uhe <- c(sem_uhe, sem_uhe_mean)
+sem_uhe <- as.matrix(sem_uhe)
+rownames(sem_uhe) <- Pops
+colnames(sem_uhe) <- "SE_uHe"
+
+
+
+
+
+
+
+
+
+  # isolate na mean value for each pop
+na <- vector(mode = "double")
+for(i in 1: length(obj_list)){
+na[i] <- stats_p[[i]][ length(stats_p[[i]][,1]) , 1 ] # I pick the last line
+}
+na_col <- c(na, mean(na)) # column to be added to the summary table
+
+
+
+
+
+
+  # isolate na loci values for each pop
+summ_na <- list()
+for(i in 1: length(obj_list)){
+summ_na[[i]] <- stats_p[[i]][ -length(stats_p[[i]][,1]) , 1 ] # I pick all lines but the last
+}
+  #calculate standard error of the mean
+sem_na <- list()
+for(i in 1: length(obj_list)){
+sem_na[[i]] <- sd(summ_na[[i]])/sqrt(length(summ_na[[i]]))
+}
+sem_na <- unlist(sem_na)
+
+#calculate standard error of the mean of the means
+sem_na_2 <- sd(unlist(summ_na)) / sqrt(length(unlist(summ_na)))
+
+    #combine standard errors
+sem_na_col <- c(sem_na, sem_na_2)
+
+
+
+
+
+
+
+
+
+
+# basic stats hierfstat
+stats <- basic.stats(obj)
+
+# make hierfstat output same as poppr's so as to use the same function later
+# maybe though I should transform poppr as hierfstat's data.frame structure as the code looks cleaner (check "ne hierfstat)
+test <- list()
+for(i in 1:length(obj_list))
+test[[i]] <- stats$Ho[,i]
+
+#########################3
+
+poppr2hierfstat_out <- function(obj, variable){
+  
+obj_list <- seppop(obj)
+  
+stats_poppr <- list()
+for(i in 1: length(obj_list)){
+  stats_poppr[[i]] <- locus_table(obj_list[[i]])
+}
+
+table_out <- list()
+for(i in 1:length(obj_list))
+table_out[[i]] <- stats_poppr[[i]][-nrow(stats_poppr[[1]]), variable]
+
+table_out <- as.matrix(as.data.frame(table_out))
+colnames(table_out) <- popNames(obj)
+
+return(table_out)
+}
+
+#######################3
+
+############################
+
+
+#########################
+
+
+#ne hierfstat
+stats[["ne"]] <- 1 / (1 - (stats[["Hs"]]))
+
+table_out <- function(obj, variable, name){
+  
+means <- colMeans(variable, na.rm=T)
+out <- c(means, mean(variable))
+
+out <- as.data.frame(out)
+Pops <- c(popNames(obj), "Total")
+rownames(out) <- Pops
+colnames(out) <- name
+
+sem_out <- apply(variable, 2, function(x) sd(x) / sqrt(length(x))) # 2 means work along columns
+sem_out_mean <- sd(variable) / sqrt(length(variable))
+
+sem_out <- as.data.frame(c(sem_out, sem_out_mean))
+rownames(sem_out) <- Pops
+colnames(sem_out) <- paste("SE", name, sep = "_")
+
+table_out <- cbind(out, sem_out)
+
+return(table_out)
+}
+
+
+#ne adegenet
+stats_a_list <- list()
+for(i in 1: length(obj_list)){
+  stats_a_list[[i]] <- summary(obj_list[[i]])
+}
+
+ne <- list()
+for(i in 1:length(stats_a_list)){
+  ne[[i]] <- 1 / (1 - stats_a_list[[i]][["Hexp"]])
+}
+ne <- as.data.frame(ne)
+ne_means <- colMeans(ne)
+
+#ne poppr
+ne_p <- list()
+for(i in 1:length(stats_p))
+  ne_p[[i]] <- 1 / (1 - stats_p[[i]][-nrow(stats_p[[1]]), "Hexp"])
+  
+ne_p <- as.data.frame(ne_p)
+ne_p_means <- colMeans(ne_p)
+
+
+# LGP
+LGP <- summ_na - ne
+
+  #   #calculate standard error of the mean
+  # sem_na <- list()
+  # for(i in 1: length(obj_list)){
+  # sem_na[[i]] <- sd(summ_na[[i]])/sqrt(length(summ_na[[i]]))
+  # }
+  # sem_na <- unlist(sem_na)
+
+  # sem of LGP
+sem_LGP <- vector(mode = "double")
+for(i in 1:length(obj_list)){
+  sem_LGP[i] <- sd(LGP[i]) / sqrt(length(LGP[i]))
+}
+
+# allelic richness
+ar <- allelic.richness(obj)
+ar <- colMeans(ar[["Ar"]])
+
+
+stats <- basic.stats(obj)
+
+Ho <- colMeans(stats$Ho, na.rm=T)
+Ho_col <- c(Ho, mean(Ho))
+# Hs <- colMeans(stats$Hs, na.rm=T)
+Fis <- colMeans(stats$Fis, na.rm=T)
+div2 <- data.frame(A=na, A_se=sem_na, Ar=ar, ne=ne, LGP=LGP, Ho=Ho, He=uhe, He_se=sem_uhe, Fis=Fis)
+tots <- colMeans(div2) #TOTAL FIS IS USUALLY CALCULATED FROM MEAN HO AND MEAN Hs - NOT THIS WAY!
+div2 <- rbind(div2, tots)
+div <- cbind(div[,c("Pop", "N")], div2)
+PA <- rowSums(private_alleles(obj, count.alleles=F))
+PA <- data.frame(PA)
+PA <- rbind(PA, Total=colSums(PA))
+div <- cbind(div, PA)
+row.names(div) <- NULL
+is.num <- sapply(div, is.numeric)
+div[is.num] <- lapply(div[is.num], round, 3)
+knitr::kable(div)
+```
+
+### Better use GenAlEx output as it provides bootstraped ses and cis
+```{r basic.stats}
+basic.stats(obj)
+```
+
+```{r pairwise_G2st}
+pairwise.G2st <- function(dat,diploid=TRUE){
+  dat<-genind2hierfstat(dat)
+  dat<-dat[order(dat[,1]),]
+  pops<-unique(dat[,1])
+  npop<-length(pops)
+  fstmat <- matrix(nrow=npop,ncol=npop,dimnames=list(pops,pops))
+  if (is.factor(dat[,1])) {
+    dat[,1]<-as.numeric(dat[,1])
+    pops<-as.numeric(pops)
+  }
+  for(a in 2:npop){
+    for(b in 1:(a-1)){
+      subdat <- dat[dat[,1] == pops[a] | dat[,1]==pops[b],]
+      fstmat[a,b]<-fstmat[b,a]<- basic.stats(subdat,diploid=diploid)$overall[10]
+    }
+    
+  }
+  fstmat <- fstmat[ -1, -npop]
+  fstmat
+}
+
+pairwise.G2st(obj)
+```
+
+
+```{r ar_pops, dpi=96, cache=T}
+ar <- allelic.richness(obj)
+
+# create data.frame for ggplot2
+ar[["Ar"]] <- as.data.frame(ar[["Ar"]])
+colnames(ar[["Ar"]]) <- popNames(obj)
+ar_table <- ar[["Ar"]] # to be printed by kable
+ar[["Ar"]]$locus <- rownames(ar[["Ar"]])
+ar[["Ar"]] <- gather(ar[["Ar"]], Population, Ar, -locus)
+
+ar_table["Mean", ] <- colMeans(ar_table) # a row countaining means
+knitr::kable(ar_table, "html", 
+             caption = "Allelic richness per population") %>% 
+  kable_styling(bootstrap_options = "striped", full_width = F) %>% 
+  add_footnote(paste("rarefaction = ", ar[["min.all"]], "genes"), notation = "symbol") %>% 
+  row_spec(length(locNames(obj))+1, bold = T)
+
+
+
+title <- paste("Allelic richness per population (rarefaction = ", ar[["min.all"]], "genes)")
+
+y_axis <- seq(0, 100, 2)
+
+ggplot(ar[["Ar"]], aes(x = Population, y = Ar)) +
+  geom_boxplot() +
+  scale_y_continuous(name = "Allelic richness", breaks = y_axis) +
+  theme_classic() +
+  stat_summary(fun.y=mean, geom="point", shape=4, size=2, color="black", fill="black") +
+  ggtitle(title)
+```
+
+### Private alleles per population
+```{r private_pops, cache=TRUE, dpi=300, fig.width=8.5}
+private <- private_alleles(obj, report = "data.frame")
+ggplot(private) + geom_tile(aes(x = population, 
+                                y = allele, 
+                                fill = count)) +
+  ggtitle("Private alleles per population")
+```
+
+### Is mean observed H significantly different?
+```{r t-test, cache=T}
+summ <- summary(obj)
+bartlett.test(list(summ$Hexp,summ$Hobs))
+t.test(summ$Hexp,summ$Hobs,pair=T,var.equal=TRUE,alter="greater")
+t.test(summ$Hexp,summ$Hobs,pair=T,var.equal=TRUE,alter="two.sided")
+```
+
+### Hardy - Weinberg equilibrium
+```{r HWE, fig.width=9, dpi=300, cache=TRUE}
+(hw.obj <- seppop(obj) %>% 
+  lapply(hw.test, B = 1000))
+# seppop: calculates p-value for each locus of every pop
+# B: number of permutations
+
+# Isolate p-values either from chi2 test (j=3) or 
+# from exact test (j=4)
+hw.mat <- sapply(hw.obj, "[", i = TRUE, j = 4)
+# Take the third/fourth column with all rows
+
+# Multiple test correction (Holm-Bonferroni)
+hw.holm.values <- p.adjust(hw.mat, method = "holm")
+locinames <- rownames(hw.mat)
+popnames <- colnames(hw.mat)
+
+hw.holm.mat <- matrix(nrow = length(locNames(obj)),
+                      ncol = length(popNames(obj)),
+                      data = hw.holm.values, byrow = F)
+rownames(hw.holm.mat) <- locinames
+colnames(hw.holm.mat) <- popnames
+
+levelplot(t(hw.holm.mat), aspect = "fill", xlab="Pop", ylab="Marker", main = "HWE exact test p-values after Holm-Bonferroni correction (1000 permutations)")
+
+kable(hw.holm.mat, "html", caption = "HWE exact test p-values after Holm-Bonferroni correction (1000 permutations)") %>% 
+ kable_styling(bootstrap_options = "striped", full_width = F)
+```
+
+
+### Linkage Disequilibrium
+
+```{r LD_strataG, dpi=300, cache=T}
+
+# function to create triangular data.frame
+triangle_mat <- function(data){
+  data <- spread(data, Locus.2, p.value)
+  
+  vector <- vector(mode = "integer") #order of columns based on how many values they have
+  for(i in 2:length(colnames(data))){
+    vector[i-1] <- length(na.omit(data[,i]))
+  }
+  
+  names <- colnames(data[,-1]) #loci names
+  mat <- rbind(names, vector)
+  mat <- as.data.frame(mat)
+  mat2 <- mat[order(vector, decreasing = TRUE)]
+  order_vector <- as.matrix(mat2[1,])
+  order_vector <- as.vector(order_vector)
+  order_vector
+  
+  row.names(data) <- data[,1] #insert marker names as rownames
+  data <- data[,-1]
+  
+  data <- data[,order_vector] #order the data.frame columns according to the number of values they have
+  
+  
+  
+  
+  vector <- vector(mode = "integer")
+  for(i in 1:length(rownames(data))){
+    vector[i] <- length(na.omit(unlist(data[i,], use.names = FALSE)))
+  }
+  
+  names <- rownames(data) #loci names
+  mat <- rbind(names, vector)
+  mat <- as.data.frame(mat)
+  mat2 <- mat[order(vector, decreasing = FALSE)]
+  order_vector <- as.matrix(mat2[1,])
+  order_vector <- as.vector(order_vector)
+  order_vector
+  
+  data <- data[order_vector,]
+  
+}
+
+
+# function to calculate LD for genind objects
+LDgenind <- function(obj){
+  
+  
+
+# function to convert genind to gtypes
+# the function genind2gtypes doesn't work
+genind_to_gtypes <- function(obj){
+  obj_loci <- genind2loci(obj)
+  obj_g <- loci2gtypes(obj_loci)
+}
+
+
+# Split dataset by pop in order to calculate per pop LD
+genind_to_gtypes_by_pop <- function(obj){
+  obj_list <- seppop(obj)
+  
+  obj_g_list <- list()
+  for(i in popNames(obj)){
+    obj_g_list[[i]] <- genind_to_gtypes(obj_list[[i]])
+  }
+  
+  return(obj_g_list)
+}
+
+
+# Convert to a gtypes object
+obj_g <- genind_to_gtypes(obj)
+
+# Split dataset by pop in order to calculate per pop LD
+obj_g_list <- genind_to_gtypes_by_pop(obj)
+
+# Calculate LD using strataG via genepop
+LD_list <- list()
+for(i in popNames(obj)){
+  LD_list[[i]] <- LDgenepop(obj_g_list[[i]])
+}
+
+return(LD_list) # raw genepop output
+}
+
+LD_genepop <- LDgenind(obj)
+LD_genepop # raw genepop output
+
+
+
+# function to transform the raw genepop output to a nice graph
+LD_df_ggplot <- function(LD_genepop){
+# create new data.frame with only the columns that are useful
+new_dfs <- list()
+for(i in names(LD_genepop)){
+  new_dfs[[i]] <- LD_genepop[[i]][,1:3]
+}
+
+# apply multiple test correction
+for(i in names(new_dfs)){
+  new_dfs[[i]][,"p.value"]<- p.adjust(new_dfs[[i]][,"p.value"], method = "holm") 
+}
+
+# create triangle data.frame
+LD_dfs <- list()
+for(i in names(new_dfs)){
+  LD_dfs[[i]] <- as.data.frame(triangle_mat(new_dfs[[i]]))
+}
+
+# In this step a new column is added containing the names for Locus.1
+# This is required for the subsequent steps
+for(i in names(LD_dfs)){
+  LD_dfs[[i]]$Locus.1 <- rownames(LD_dfs[[i]])
+}
+
+# Create one data.frame with all data & assign proper column names
+LD_dfs <- na.omit(melt(LD_dfs, 'Locus.1'))
+names(LD_dfs) <- c("Locus.1", "Locus.2", "p.value", "pop")
+
+return(LD_dfs)
+}
+
+LD_df <- LD_df_ggplot(LD_genepop)
+
+
+# Plot
+ggplot(LD_df, aes(Locus.1, Locus.2, fill = p.value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(low = "red", high = "blue", mid = "white", 
+                       midpoint = 0.5, limit = c(0,1), 
+                       # space = "Lab",
+                       name = "P-value") +
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+                                   size = 8, hjust = 1),
+        axis.text.y = element_text(size = 8))+
+  theme(axis.title.x = element_blank(),
+        axis.title.y = element_blank()) +
+  # coord_fixed() + # make it squared
+  facet_wrap(~ pop, nrow = 3) +
+  ggtitle("LD p-values after Holm-Bonferroni correction")
+
+```
+
+
+# Genetic differentiation
+
+### Fst table
+```{r Fst_table, cache=T}
+library(hierfstat)
+pair_fst <- genet.dist(obj, method = "Nei87")
+pair_fst
+```
+
+### Cavalli-Sforza and Edwards Chord distance
+```{r cavalli-sforza_1, fig.width = 10, dpi=300, cache=T}
+# https://groups.google.com/forum/#!topic/poppr/vEQ8vb2oObQ
+
+# create hierfstat input file
+obj_hier <- genind2hierfstat(obj)
+
+# create cav-sf distance table
+cav_sf <- genet.dist(obj_hier, method = "Dch")
+cav_sf <- as.matrix(cav_sf)
+pop_vector <- popNames(obj)
+colnames(cav_sf) <- pop_vector
+rownames(cav_sf) <- pop_vector
+
+
+# Get lower triangle of the matrix
+  get_lower_tri<-function(matrix){
+    matrix[upper.tri(matrix)] <- NA
+    return(matrix)
+  }
+
+# print table with knitr  
+cav_sf <- get_lower_tri(cav_sf)  
+options(knitr.kable.NA = '')  
+knitr::kable(cav_sf, "html", caption = "Cavalli-Sforza and Edwards Chord distance between populations") %>% 
+ kable_styling(bootstrap_options = "striped", full_width = F)
+```
+
+
+
+### Nei distance 1972 1978
+
+```{r nei_hierfstat, cache=T}
+# create nei distance table
+nei <- genet.dist(obj, method = "Ds")
+nei <- as.matrix(nei)
+pop_vector <- popNames(obj)
+colnames(nei) <- pop_vector
+rownames(nei) <- pop_vector
+
+
+# print table with knitr  
+nei<- get_lower_tri(nei)  
+options(knitr.kable.NA = '')  
+kable(nei, "html", caption = "Nei's Standard genetic distance between populations") %>%
+  kable_styling(bootstrap_options = "striped", full_width = F)
+```
+
+
+### Principal Component Analysis
+```{r pca, dpi=96, cache=T}
+
+# In case there are missing data, replace with mean
+X <- tab(obj, freq = TRUE, NA.method = "mean") 
+
+pca.obj <- dudi.pca(X, scale = FALSE, scannf = FALSE, nf = 3)
+
+fviz_eig(pca.obj, main = "Scree plot of PCA")
+```
+
+```{r pca_plots, fig.width=10, dpi=300, cache=T}
+ggord(pca.obj, pop(obj), arrow = NULL, txt = NULL, grp_title="Populations", ellipse=T, poly=FALSE, size=2, alpha=.8, coord_fix=F, axes = c("1", "2")) +
+  geom_hline(yintercept=0,linetype=2) + 
+  geom_vline(xintercept=0,linetype=2) +
+  ggtitle("Principal Component Analysis") +
+  scale_shape_manual('Groups', values = c(15, 17))
+
+ggord(pca.obj, pop(obj), arrow = NULL, txt = NULL, grp_title="Populations", ellipse=T, poly=FALSE, size=2, alpha=.8, coord_fix=F, axes = c("1", "3")) +
+  geom_hline(yintercept=0,linetype=2) + 
+  geom_vline(xintercept=0,linetype=2) +
+  ggtitle("Principal Component Analysis") +
+  scale_shape_manual('Groups', values = c(15, 17))
+
+loadingplot(pca.obj$c1^2, threshold = 0.05)
+```
+
+### Correspondence Analysis
+```{r ca, dpi=96, cache=T}
+ca1 <- dudi.coa(tab(obj, freq = TRUE, NA.method = "mean"), scannf=FALSE,nf=3) 
+
+fviz_eig(ca1, main = "Scree plot of CA")
+```
+
+```{r ca_plots, fig.width=10, dpi=300, cache=T}
+# devtools::install_github('fawda123/ggord')
+
+ggord(ca1, pop(obj), arrow = NULL, txt = NULL, grp_title="Populations", ellipse=T, poly=FALSE, size=2, alpha=.8, coord_fix=F, axes = c("1", "2")) +
+  geom_hline(yintercept=0,linetype=2) + 
+  geom_vline(xintercept=0,linetype=2) +
+  ggtitle("Correspondence Analysis") +
+  scale_shape_manual('Groups', values = c(15, 17))
+
+
+ggord(ca1, pop(obj), arrow = NULL, txt = NULL, grp_title="Populations", ellipse=T, poly=FALSE, size=2, alpha=.8, coord_fix=F, axes = c("1", "3")) +
+  geom_hline(yintercept=0,linetype=2) + 
+  geom_vline(xintercept=0,linetype=2) +
+  ggtitle("Correspondence Analysis") +
+  scale_shape_manual('Groups', values = c(15, 17))
+  # scale_color_viridis_d(option = "D")
+  #scale_colour_brewer(palette="Set3")
+
+loadingplot(ca1$c1^2, threshold = 8)
+```
+
+
+### AMOVA
+```{r amova, cache=T}
+poppr.amova(obj, ~Pop, within = F)
+```
+
+### AMOVA - no threshold for missing values
+```{r amova_within, cache=T}
+poppr.amova(obj, ~Pop, within = F, cutoff = 0.5)
+```
+
+### N~e~ estimation
+```{r ne, cache=T, dpi=300}
+readLines("PINUS_LOCI_KASSANDRALD.txt")
+Ne <- read.csv("Ne_estimation_table.csv", check.names=FALSE) # create similar template to import from the Ne estimator output
+
+Ne_tidy <- gather(Ne, frequency, Ne, -Population)
+
+ggplot(Ne_tidy, aes(x = factor(Ne_tidy$frequency, levels = unique(as.character(Ne_tidy$frequency))), # this was added so that ggplot respects the order of the custom order of the discrete variable
+                    y = Ne, group = Population)) +
+  geom_line(aes(linetype = Population, color = Population)) +
+  geom_point(aes(color = Population)) +
+  xlab("Lowest Allele Frequency Used") +
+  ylab("Estimated Ne") +
+  ggtitle("Effective Population Size (LD method)") +
+  theme_classic()
+```
+
+### Hierarchical F~ST~ 
+```{r hier_fst, eval=FALSE, include=FALSE}
+varcomp.glob(obj, levels = Country,Pop)
+```
+
+
+### Left to do
+null alleles --> Kalinowski MLnullFreq
+standard parameters - se, sd, 95%cis --> import GenAlEx output as text
+  --> GenAlEx outputs G-statistics for all pops together, so it is far from ideal. 
+ne estimation --> GenAlEx but I also want to calculate from it LGP - so it should be accesible within R
+geneflow - migration 1/4fst - > probably GenAlEx
+BAYESCAN - outFLANK in R - Lositan
+MIGRATE
+test.within - hierarchical Fst Goudet-
+mantel test for any comparison (eg. nSSR vs EST-SSR)
+
+
+Make table with Ho He using adegenet's summary function. Also include in the table HWE , N of alleles, Ne of alleles
+
+In F~ST~ it would be advisable to also display standard error (Meirmans)
+
+Bootstraping randomly sampling loci with replacement because including or excluding a single locus entails a substantial impact in calculated statistics. Maybe with boot.ppfis and boot.ppfst???
+
+Fis ci - Make plot scatter plot with error bars - Check significance with t-test
+```{r fis_ci}
+boot.ppfis(obj)
+
+stats$Fis
+
+Gtest <- gstat.randtest(obj, nsim=999) 
+Gtest
+plot(Gtest)
+
+bartlett.test(list(stats$Ho[,1], stats$Ho[,2]))
+
+t.test(stats$Ho[,1], stats$Ho[,2], var.equal = T,
+       pair=F, alternative = "two.sided")
+
+t.test(stats$Fis[,1], stats$Fis[,2], var.equal = T,
+       pair=F, alternative = "two.sided")
+
+ttest<-t.test(private_alleles(obj, count.alleles=F)[1,],
+       private_alleles(obj, count.alleles=F)[2,],
+              pair=F, alternative = "two.sided")
+```
+
+
+# Reproducibility
+```{r reproducibility}
+devtools::session_info()
+```
+
+# Bibliography
+
