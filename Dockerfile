@@ -25,29 +25,6 @@ RUN tlmgr install \
 COPY tahoma.ttf /usr/share/fonts/truetype/tahoma.ttf
 COPY tahomabd.ttf /usr/share/fonts/truetype/tahomabd.ttf
 
-# Install R packages from CRAN
-RUN apt-get update -qq \
-  && apt-get -y install libudunits2-dev # needed for scatterpie
-RUN install2.r --error \
-  bookdown \
-  citr \
-  ggThemeAssist \
-  remedy \
-  popprxl \
-  #genepop # it is install as a linux executable below \
-  factoextra \
-  kableExtra \
-  scatterpie # pie charts on map \
-  ggmap \
-  ggsn # adds scale bar and north arrow to ggmap maps \
-  && rm -rf /tmp/downloaded_packages/ /tmp/*.rds
-
-# Install R packages from github
-RUN installGithub.r \
-  jgx65/hierfstat \
-  fawda123/ggord \
-  && rm -rf /tmp/downloaded_packages/ /tmp/*.rds
-
 # Create directory for population genetics software on linux
 RUN mkdir /home/rstudio/software
 
@@ -118,6 +95,30 @@ RUN install2.r --error \
 RUN installGithub.r \
   royfrancis/pophelper \
   && rm -rf /tmp/downloaded_packages/ /tmp/*.rds
+  
+# Install R packages from CRAN
+RUN apt-get update -qq \
+  && apt-get -y install libudunits2-dev # needed for scatterpie
+RUN install2.r --error \
+  bookdown \
+  citr \
+  ggThemeAssist \
+  remedy \
+  popprxl \
+  #genepop # it is install as a linux executable below \
+  factoextra \
+  kableExtra \
+  scatterpie # pie charts on map \
+  ggmap \
+  ggsn # adds scale bar and north arrow to ggmap maps \
+  diveRsity \
+  && rm -rf /tmp/downloaded_packages/ /tmp/*.rds
+
+# Install R packages from github
+RUN installGithub.r \
+  jgx65/hierfstat \
+  fawda123/ggord \
+  && rm -rf /tmp/downloaded_packages/ /tmp/*.rds  
   
 # Import Data  
 COPY /Data /home/rstudio/Data
