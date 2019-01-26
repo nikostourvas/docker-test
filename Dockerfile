@@ -79,6 +79,17 @@ RUN mkdir /home/rstudio/software/bayescan \
   && cd /home/rstudio/software/bayescan/BayeScan2.1/source \
   && make
   
+# Install NeEstimator
+RUN mkdir /home/rstudio/software/ne_estimator \
+  && cd /home/rstudio/software/ne_estimator \
+  && wget http://www.molecularfisherieslaboratory.com.au/download/1805/ \
+  && mv /home/rstudio/software/ne_estimator/index.html /home/rstudio/software/ne_estimator/ne.zip \
+  && unzip ne.zip \
+  && rm -rf ne.zip \
+  && rm -rf __MACOSX \
+  && cd /Zip Folder_180312 \
+  && chmod +x Ne2-1L
+  
 # Install Pophelper for Structure output
   # install linux dependencies
 RUN sudo apt -y install libcairo2-dev \
